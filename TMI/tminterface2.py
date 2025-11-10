@@ -13,7 +13,7 @@ from enum import IntEnum, auto
 import numpy as np
 # from tminterface.structs import CheckpointData, SimStateData
 
-from config_files import config_copy
+# from config_files import config_copy
 
 HOST = "127.0.0.1"
 

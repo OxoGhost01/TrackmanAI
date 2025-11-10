@@ -34,7 +34,7 @@ import numpy as np
 import numpy.typing as npt
 import psutil
 
-from config_files import config_copy, user_config
+# from config_files import config_copy, user_config
 # from trackmania_rl import contact_materials, map_loader
 from TMI.tminterface2 import MessageType, TMInterface
 
