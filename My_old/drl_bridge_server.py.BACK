@@ -1,0 +1,62 @@
+# agent_server.py
+# Simple TCP server that receives CSV state lines and returns simple actions:
+# expects: tick,sx,sy,sz,inputSteer,inputGas,gear
+# replies: steer_int,gas_int\n
+
+import socket
+
+HOST = '127.0.0.1'
+PORT = 5400
+
+def policy(state):
+    # state: dict with keys 'tick','sx','sy','sz','inputSteer','inputGas','gear'
+    # Replace with your agent logic / PPO inference.
+    # Example: simple rule — keep steering zero, apply throttle
+    steer_out = 0               # integer in [-65536,65536]
+    gas_out = -40000            # negative values commonly accelerate in TMInterface testing; tune as needed
+    return int(steer_out), int(gas_out)
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((HOST, PORT))
+    s.listen(1)
+    print(f"Agent server listening on {HOST}:{PORT}")
+    conn, addr = s.accept()
+    print("Connected by", addr)
+    with conn:
+        # We'll use a simple text-mode line protocol
+        fileobj = conn.makefile(mode='rw', encoding='utf-8', newline='\n')
+        while True:
+            line = fileobj.readline()
+            if not line:
+                print("Connection closed by client")
+                break
+            line = line.strip()
+            if line == "":
+                continue
+            parts = line.split(",")
+            try:
+                # parse expected CSV
+                tick = int(parts[0])
+                sx = float(parts[1]); sy = float(parts[2]); sz = float(parts[3])
+                inputSteer = float(parts[4]); inputGas = float(parts[5])
+                gear = int(parts[6])
+            except Exception as e:
+                print("Malformed state:", line, "err:", e)
+                # reply a safe "no-op" (zero inputs)
+                fileobj.write("0,0\n")
+                fileobj.flush()
+                continue
+
+            state = {
+                'tick': tick,
+                'sx': sx, 'sy': sy, 'sz': sz,
+                'inputSteer': inputSteer, 'inputGas': inputGas,
+                'gear': gear
+            }
+
+            steer_out, gas_out = policy(state)
+
+            # send action as CSV line, newline-terminated
+            fileobj.write(f"{steer_out},{gas_out}\n")
+            fileobj.flush()
