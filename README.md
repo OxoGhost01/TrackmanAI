@@ -8,3 +8,10 @@ To put it simply : you have a plugin running with the game (Python_Link.as). Thi
 When on a race, the plugin send to the client some data about the car, and the agent i will implement later on, will decide what to do.
 
 I use the TMI implementation from the [Linesight Project](https://github.com/Linesight-RL/linesight), because it's really hard to code and i don't want to spend too much time on this for now.
+ -> all the files in TMI are from Linesight, maybe modified a little bit but not too much as i don't understand all the parts
+
+ REQUIREMENTS : 
+ ```python 
+ pip install numpy opencv-python pygbx python-libxdo pywin32 scipy tminterface torch
+  ```
+  
