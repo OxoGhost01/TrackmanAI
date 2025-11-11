@@ -11,7 +11,6 @@ I use the TMI implementation from the [Linesight Project](https://github.com/Lin
  -> all the files in TMI are from Linesight, maybe modified a little bit but not too much as i don't understand all the parts
 
  REQUIREMENTS : 
- ```python 
+ ```bash 
  pip install numpy opencv-python pygbx python-libxdo pywin32 scipy tminterface torch
   ```
-  
