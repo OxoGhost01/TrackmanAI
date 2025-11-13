@@ -1,3 +1,5 @@
+import os
+from pathlib import Path
 from agent.agent import TrackmaniaAgent
 from TMI.game_instance_manager import GameInstanceManager
 from agent.policy_adapter import make_exploration_policy
@@ -7,7 +9,7 @@ def update_network():
     pass  # Will call PPOTrainer.update() later cuz now i'm checking if this works
 
 if __name__ == "__main__":
-    agent = TrackmaniaAgent(obs_dim=1000, action_dim=3)
+    agent = TrackmaniaAgent(state_dim=1000, action_dim=3)
     exploration_policy = make_exploration_policy(agent)
 
     gim = GameInstanceManager(game_spawning_lock=None, tmi_port=5400)
@@ -19,3 +21,7 @@ if __name__ == "__main__":
     )
 
     print("Rollout finished:", stats)
+    # Delete generated config_copy.py after training
+    cfg = Path("config_files/config_copy.py")
+    if cfg.exists():
+        os.remove(cfg)
