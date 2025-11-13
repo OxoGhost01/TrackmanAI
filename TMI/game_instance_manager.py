@@ -34,8 +34,8 @@ import numpy as np
 import numpy.typing as npt
 import psutil
 
-# from config_files import config_copy, user_config
-# from trackmania_rl import contact_materials, map_loader
+from config_files import config_copy, user_config
+from config_files import contact_materials, map_loader
 from TMI.tminterface2 import MessageType, TMInterface
 
 if config_copy.is_linux:
@@ -159,7 +159,6 @@ class GameInstanceManager:
             def get_hwnds_for_pid(pid):
                 def callback(hwnd, hwnds):
                     _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
-
                     if found_pid == pid:
                         hwnds.append(hwnd)
                     return True
@@ -170,9 +169,11 @@ class GameInstanceManager:
 
             while True:
                 for hwnd in get_hwnds_for_pid(self.tm_process_id):
-                    if win32gui.GetWindowText(hwnd).startswith("Track"):
+                    title = win32gui.GetWindowText(hwnd)
+                    if title and "Track" in title and win32gui.IsWindowVisible(hwnd):
                         self.tm_window_id = hwnd
                         return
+
                 # else:
                 #     raise Exception("Could not find TmForever window id.")
 
@@ -184,6 +185,20 @@ class GameInstanceManager:
 
     def get_tm_pids(self) -> List[int]:
         return [process.pid for process in psutil.process_iter() if self.is_tm_process(process)]
+    
+    def get_process_triplets(self):
+        ps_script = r"""
+        Get-CimInstance Win32_Process | ForEach-Object {
+            "$($_.Name) $($_.ParentProcessId) $($_.ProcessId)"
+        }
+        """
+        output = subprocess.check_output(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            stderr=subprocess.DEVNULL
+        ).decode().splitlines()
+
+        return [line.strip() for line in output if line.strip()]
+
 
     def launch_game(self):
         self.tm_process_id = None
@@ -200,6 +215,7 @@ class GameInstanceManager:
                     break
             self.tm_process_id = list(tmi_pid_candidates)[0]
         else:
+            # Launch TMInterface through TMLoader
             launch_string = (
                 'powershell -executionPolicy bypass -command "& {'
                 f" $process = start-process -FilePath '{user_config.windows_TMLoader_path}'"
@@ -208,18 +224,24 @@ class GameInstanceManager:
                 ' echo exit $process.id}"'
             )
 
+            # TMInterface bootstrap PID
             tmi_process_id = int(subprocess.check_output(launch_string).decode().split("\r\n")[1])
+
+            # Find Trackmania child process
             while self.tm_process_id is None:
-                tm_processes = list(
-                    filter(
-                        lambda s: s.startswith("TmForever"),
-                        subprocess.check_output("wmic process get Caption,ParentProcessId,ProcessId").decode().split("\r\n"),
-                    )
-                )
-                for process in tm_processes:
-                    name, parent_id, process_id = process.split()
-                    parent_id = int(parent_id)
-                    process_id = int(process_id)
+                process_lines = self.get_process_triplets()
+
+                tm_processes = [line for line in process_lines if line.startswith("TmForever")]
+
+                for line in tm_processes:
+                    try:
+                        name, parent_id, process_id = line.split()
+                        parent_id = int(parent_id)
+                        process_id = int(process_id)
+                    except ValueError:
+                        continue  # malformed line → skip
+
+                    # TMForever process whose parent is the TMI bootstrap
                     if parent_id == tmi_process_id:
                         self.tm_process_id = process_id
                         break
