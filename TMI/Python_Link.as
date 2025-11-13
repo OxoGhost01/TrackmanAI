@@ -165,7 +165,7 @@ int HandleMessage()
             if(debug){
                 print("Server: Set input state message");
             }
-            double steer = clientSock.ReadDouble();  # Modified here to be able to steer with "more precision"
+            double steer = clientSock.ReadDouble();  // Modified here to be able to steer with "more precision"
             const bool accelerate = clientSock.ReadUint8()>0;
             const bool brake = clientSock.ReadUint8()>0;
 
