@@ -326,7 +326,8 @@ class GameInstanceManager:
         ) = map_loader.sync_virtual_and_real_checkpoints(zone_centers, map_path)
 
     def rollout(self, exploration_policy: Callable, map_path: str, zone_centers_filename: str, update_network: Callable):
-        zone_centers = map_loader.load_next_map_zone_centers(zone_centers_filename, map_path)  # Added this because else i had an error when i give a .npy file instead of directly the zone centers
+        base_dir = config_copy.windows_project_path  #! Only works if on windows
+        zone_centers = map_loader.load_next_map_zone_centers(zone_centers_filename, base_dir)
         (
             zone_transitions,
             distance_between_zone_transitions,
