@@ -215,17 +215,44 @@ class GameInstanceManager:
                     break
             self.tm_process_id = list(tmi_pid_candidates)[0]
         else:
-            # Launch TMInterface through TMLoader
             launch_string = (
                 'powershell -executionPolicy bypass -command "& {'
-                f" $process = start-process -FilePath '{user_config.windows_TMLoader_path}'"
+                f" $process = Start-Process -FilePath '{user_config.windows_TMLoader_path}'"
                 " -PassThru -ArgumentList "
-                f'\'run TmForever "{user_config.windows_TMLoader_profile_name}" /configstring=\\"set custom_port {self.tmi_port}\\"\';'
-                ' echo exit $process.id}"'
+                f'\'run TmForever \"{user_config.windows_TMLoader_profile_name}\" '
+                f'/configstring=\\\"set custom_port {self.tmi_port}\\\"\''
+                '; Write-Output \"exit $($process.Id)\"'
+                '}"'
             )
 
-            # TMInterface bootstrap PID
-            tmi_process_id = int(subprocess.check_output(launch_string).decode().split("\r\n")[1])
+            # Launch TMInterface through TMLoader
+            output = subprocess.check_output(launch_string).decode()
+            print("PowerShell launch output:")
+            print(output)
+
+            # Parse PID from output
+            lines = [l.strip() for l in output.splitlines() if l.strip()]
+
+            tmi_process_id = None
+
+            # 1) Preferred format: "exit 1234"
+            for line in lines:
+                if line.lower().startswith("exit "):
+                    parts = line.split()
+                    if len(parts) == 2 and parts[1].isdigit():
+                        tmi_process_id = int(parts[1])
+                        break
+
+            # 2) Fallback: a line that is just the PID (e.g. "7312")
+            if tmi_process_id is None:
+                for line in lines:
+                    if line.isdigit():
+                        tmi_process_id = int(line)
+                        break
+
+            if tmi_process_id is None:
+                # Could not parse a PID
+                raise RuntimeError(f"Unexpected PowerShell output when launching TMLoader: {lines!r}")
 
             # Find Trackmania child process
             while self.tm_process_id is None:
@@ -298,7 +325,8 @@ class GameInstanceManager:
             self.max_allowable_distance_to_real_checkpoint,
         ) = map_loader.sync_virtual_and_real_checkpoints(zone_centers, map_path)
 
-    def rollout(self, exploration_policy: Callable, map_path: str, zone_centers: npt.NDArray, update_network: Callable):
+    def rollout(self, exploration_policy: Callable, map_path: str, zone_centers_filename: str, update_network: Callable):
+        zone_centers = map_loader.load_next_map_zone_centers(zone_centers_filename, map_path)  # Added this because else i had an error when i give a .npy file instead of directly the zone centers
         (
             zone_transitions,
             distance_between_zone_transitions,
