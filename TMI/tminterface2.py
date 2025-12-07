@@ -93,9 +93,9 @@ class TMInterface:
         state.cp_data.resize(CheckpointData.cp_times_field, state.cp_data.cp_times_length)
         return state
 
-    def set_input_state(self, steer: float, accelerate: bool, brake: bool):
+    def set_input_state(self, left: bool, right: bool, accelerate: bool, brake: bool):
         self.sock.sendall(
-            struct.pack("iBBBB", MessageType.C_SET_INPUT_STATE, np.float32(steer), np.uint8(accelerate), np.uint8(brake))  # Modified here to accept fload steer inputs
+            struct.pack("iBBBB", MessageType.C_SET_INPUT_STATE, np.uint8(left), np.uint8(right), np.uint8(accelerate), np.uint8(brake))
         )
 
     def give_up(self):
