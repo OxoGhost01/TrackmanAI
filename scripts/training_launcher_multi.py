@@ -50,7 +50,7 @@ if __name__ == "__main__":
 
     clear_tm_instances()
 
-    base_dir = Path(__file__).resolve().parents[1]  # adjust if needed
+    base_dir = Path(__file__).resolve().parents[1] 
     save_dir = base_dir / "save" / config_copy.run_name
     save_dir.mkdir(parents=True, exist_ok=True)
     tensorboard_base_dir = base_dir / "tensorboard"
@@ -69,13 +69,16 @@ if __name__ == "__main__":
     shared_steps = mp.Value(ctypes.c_int64)
     shared_steps.value = 0
 
-    gpu_collectors_count = 2
+    gpu_collectors_count = 4
     rollout_queues = [mp.Queue(config_copy.max_rollout_queue_size) for _ in range(gpu_collectors_count)]
 
     shared_network_lock = Lock()
     game_spawning_lock = Lock()
 
-    # Create shared TrackmaniaAgent (same state_dim/action_dim you used before)
+    shared_best_time = mp.Value(ctypes.c_int64, float(1e12))
+    best_time_lock = Lock()
+
+    # Create shared TrackmaniaAgent
     state_dim = 19384
     action_dim = 4
     shared_network = TrackmaniaAgent(state_dim=state_dim, action_dim=action_dim)
@@ -88,7 +91,7 @@ if __name__ == "__main__":
     shared_network.share_memory()
 
     # --- Start collector processes ---
-    base_tmi_port = config_copy.base_tmi_port  # e.g., 5400
+    base_tmi_port = config_copy.base_tmi_port
     collector_processes = [
         mp.Process(
             target=collector_process_fn,
@@ -102,6 +105,8 @@ if __name__ == "__main__":
                 save_dir,
                 base_tmi_port + process_number,
                 process_number,
+                shared_best_time,
+                best_time_lock,
             ),
         )
         for rollout_queue, process_number in zip(rollout_queues, range(gpu_collectors_count))
@@ -120,6 +125,7 @@ if __name__ == "__main__":
         base_dir,
         save_dir,
         tensorboard_base_dir,
+        shard_best_time = shared_best_time,
         device=device,
     )
 

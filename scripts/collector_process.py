@@ -19,6 +19,8 @@ def collector_process_fn(
     save_dir: Path,
     tmi_port: int,
     process_number: int,
+    shared_best_time,
+    best_time_lock,
 ):
     """
     Collector loop, similar spirit to Linesight's collector_process_fn.
@@ -51,7 +53,7 @@ def collector_process_fn(
             results, stats = gim.rollout(
                 exploration_policy=exploration_policy,
                 map_path="Level-1.Challenge.Gbx",
-                zone_centers_filename="level1_5_cl.npy",
+                zone_centers_filename="level1_0.5m_cl.npy",
                 update_network=lambda: None,
             )
 

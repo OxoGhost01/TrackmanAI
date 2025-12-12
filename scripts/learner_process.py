@@ -14,6 +14,8 @@ def learner_process_fn(
     base_dir,
     save_dir,
     tensorboard_base_dir,
+    shared_best_time=None,
+    best_time_lock=None,
     device=None,
     gamma=0.995,
     clip_epsilon=0.2,
