@@ -57,7 +57,7 @@ def collector_process_fn(
                 update_network=lambda: None,
             )
 
-            obs_seq, actions_idx_seq, rewards_seq = make_rewards_from_rollout(results, stats)
+            obs_seq, actions_idx_seq, rewards_seq = make_rewards_from_rollout(results, stats, shared_best_time, best_time_lock)
 
             if len(obs_seq) == 0:
                 print(f"[Collector {process_number}] Empty episode, stats={stats}")

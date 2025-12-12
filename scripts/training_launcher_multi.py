@@ -75,7 +75,7 @@ if __name__ == "__main__":
     shared_network_lock = Lock()
     game_spawning_lock = Lock()
 
-    shared_best_time = mp.Value(ctypes.c_int64, float(1e12))
+    shared_best_time = mp.Value(ctypes.c_double, float(1e12))
     best_time_lock = Lock()
 
     # Create shared TrackmaniaAgent
@@ -125,7 +125,7 @@ if __name__ == "__main__":
         base_dir,
         save_dir,
         tensorboard_base_dir,
-        shard_best_time = shared_best_time,
+        shared_best_time = shared_best_time,
         device=device,
     )
 

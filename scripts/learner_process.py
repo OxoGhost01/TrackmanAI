@@ -66,7 +66,7 @@ def learner_process_fn(
                     batch_stats.append(stats)
 
                     episode_idx += 1
-                    print(f"[Learner] Got episode {episode_idx}, len={len(obs)}, stats={stats}")
+                    # print(f"[Learner] Got episode {episode_idx}, len={len(obs)}, stats={stats}")
 
                     if len(batch_stats) >= batch_episodes:
                         break
