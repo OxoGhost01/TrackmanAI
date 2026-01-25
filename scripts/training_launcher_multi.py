@@ -1,19 +1,14 @@
-# train_ppo.py
-
 import ctypes
 import os
 import signal
 import sys
-import shutil
 from pathlib import Path
-
 import torch
 import torch.multiprocessing as mp
 from torch.multiprocessing import Lock
 from art import tprint
 
-from config_files import config_copy
-
+from scripts.create_config import create_config_copy
 from scripts.collector_process import collector_process_fn
 from scripts.learner_process import learner_process_fn
 from agent.agent import TrackmaniaAgent
@@ -23,83 +18,109 @@ torch.backends.cudnn.benchmark = True
 torch.set_num_threads(1)
 torch.set_float32_matmul_precision("high")
 
-
 def clear_tm_instances():
+    """Kill all TrackMania instances."""
     if config_copy.is_linux:
         os.system("pkill -9 TmForever.exe")
     else:
         os.system("taskkill /F /IM TmForever.exe")
-
+    
+    import time
+    time.sleep(1.0)
 
 def signal_handler(sig, frame):
-    print("Received SIGINT signal. Killing all open Trackmania instances, and saving the agent...")
-    save_agent(shared_network, save_dir)
+    print("\n" + "="*60)
+    print("Received SIGINT signal. Shutting down gracefully...")
+    print("="*60)
+    
+    try:
+        save_agent(shared_network, save_dir)
+        print("[INFO] Agent saved successfully")
+    except Exception as e:
+        print(f"[ERROR] Could not save agent: {e}")
+    
     clear_tm_instances()
-
+    
     for child in mp.active_children():
+        print(f"[INFO] Terminating child process: {child.name}")
+        child.terminate()
+    
+    import time
+    time.sleep(2.0)
+    
+    # Force kill any remaining
+    for child in mp.active_children():
+        print(f"[WARN] Force killing: {child.name}")
         child.kill()
-
+    
     tprint("Bye bye!", font="tarty1")
-    sys.exit()
-
+    sys.exit(0)
 
 if __name__ == "__main__":
+    create_config_copy()
+    from config_files import config_copy
+    
     signal.signal(signal.SIGINT, signal_handler)
-
+    
+    # Force spawn method (critical on Windows)
     mp.set_start_method("spawn", force=True)
-
+    
     clear_tm_instances()
-
+    
     base_dir = Path(__file__).resolve().parents[1] 
     save_dir = base_dir / "save" / config_copy.run_name
     save_dir.mkdir(parents=True, exist_ok=True)
+    
     tensorboard_base_dir = base_dir / "tensorboard"
-
+    
     print("Run:\n\n")
     tprint(config_copy.run_name, font="tarty4")
     print("\n" * 2)
     tprint("PPO TM Trainer", font="tarty1")
     print("\n" * 2)
     print("Training is starting!")
-
+    
     if config_copy.is_linux:
         os.system(f"chmod +x {config_copy.linux_launch_game_path}")
-
+    
     # --- Shared objects ---
-    shared_steps = mp.Value(ctypes.c_int64)
-    shared_steps.value = 0
-
-    gpu_collectors_count = 4
-    rollout_queues = [mp.Queue(config_copy.max_rollout_queue_size) for _ in range(gpu_collectors_count)]
-
-    shared_network_lock = Lock()
-    game_spawning_lock = Lock()
-
-    shared_best_time = mp.Value(ctypes.c_double, float(1e12))
-    best_time_lock = Lock()
-
+    shared_steps = mp.Value(ctypes.c_int64, 0)  # Initialize with 0
+    
+    # Number of parallel collectors
+    gpu_collectors_count = 1
+    rollout_queues = [
+        mp.Queue(config_copy.max_rollout_queue_size) 
+        for _ in range(gpu_collectors_count)
+    ]
+    
+    manager = mp.Manager()
+    shared_network_lock = manager.Lock()
+    
+    shared_best_time = mp.Value(ctypes.c_double, 1e12)
+    best_time_lock = manager.Lock()
+    
     # Create shared TrackmaniaAgent
     state_dim = 19384
     action_dim = 4
     shared_network = TrackmaniaAgent(state_dim=state_dim, action_dim=action_dim)
-
+    
     if load_agent(shared_network, save_dir):
         print("[INFO] Loaded agent from checkpoint.")
     else:
         print("[INFO] No checkpoint found. Starting from scratch.")
-
+    
     shared_network.share_memory()
-
+    
     # --- Start collector processes ---
     base_tmi_port = config_copy.base_tmi_port
+    
     collector_processes = [
         mp.Process(
             target=collector_process_fn,
             args=(
-                rollout_queue,
+                rollout_queues[process_number],
                 shared_network,
                 shared_network_lock,
-                game_spawning_lock,
                 shared_steps,
                 base_dir,
                 save_dir,
@@ -108,27 +129,51 @@ if __name__ == "__main__":
                 shared_best_time,
                 best_time_lock,
             ),
+            name=f"Collector-{process_number}",
         )
-        for rollout_queue, process_number in zip(rollout_queues, range(gpu_collectors_count))
+        for process_number in range(gpu_collectors_count)
     ]
-
+    
     for collector_process in collector_processes:
         collector_process.start()
-
-    # --- Start learner in main process (like Linesight) ---
+        print(f"[INFO] Started {collector_process.name}")
+    
+    import time
+    time.sleep(2.0)
+    
+    # --- Start learner in main process ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    learner_process_fn(
-        rollout_queues,
-        shared_network,
-        shared_network_lock,
-        shared_steps,
-        base_dir,
-        save_dir,
-        tensorboard_base_dir,
-        shared_best_time = shared_best_time,
-        device=device,
-    )
-
-    # If learner exits, wait for collectors
-    for collector_process in collector_processes:
-        collector_process.join()
+    print(f"[INFO] Learner using device: {device}")
+    
+    try:
+        learner_process_fn(
+            rollout_queues,
+            shared_network,
+            shared_network_lock,
+            shared_steps,
+            base_dir,
+            save_dir,
+            tensorboard_base_dir,
+            shared_best_time=shared_best_time,
+            best_time_lock=best_time_lock,
+            device=device,
+        )
+    except KeyboardInterrupt:
+        print("\n[INFO] Learner interrupted by user")
+    except Exception as e:
+        print(f"\n[ERROR] Learner crashed: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Cleanup
+        print("\n[INFO] Shutting down collectors...")
+        for collector_process in collector_processes:
+            collector_process.terminate()
+        
+        for collector_process in collector_processes:
+            collector_process.join(timeout=5.0)
+            if collector_process.is_alive():
+                collector_process.kill()
+        
+        clear_tm_instances()
+        print("[INFO] Shutdown complete")

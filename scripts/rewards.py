@@ -64,10 +64,20 @@ def make_rewards_from_rollout(results, stats, shared_best_time=None, best_time_l
         else:
             no_progress_counter = 0
 
+        # --- Progress efficiency reward ---
+        speed = max(float(floats[0]), 0.1)  # avoid div by zero
+        efficiency = dm / speed             # meters per (m/s)
+
+        k_efficiency = 0.05                 # small but decisive
+        r_efficiency = k_efficiency * efficiency
+
+
         r_stuck = stuck_penalty if no_progress_counter >= max_no_progress_steps else 0.0
 
-        reward_t = r_progress + r_time + r_stuck
+        reward_t = r_progress + r_time + r_stuck + r_efficiency
         rewards_seq.append(float(reward_t))
+
+    
 
     # ---- TERMINAL ----
     race_done = stats.get("race_finished", False)

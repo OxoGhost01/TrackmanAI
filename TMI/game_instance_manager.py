@@ -25,6 +25,7 @@ import math
 import os
 import subprocess
 import time
+import tempfile
 from typing import Callable, Dict, List
 
 import socket
@@ -42,6 +43,7 @@ from TMI.tminterface2 import MessageType, TMInterface
 
 if config_copy.is_linux:
     from xdo import Xdo
+    import fcntl
 else:
     import win32.lib.win32con as win32con
     import win32com.client
@@ -218,117 +220,124 @@ class GameInstanceManager:
 
     def launch_game(self, wait_for_child: float = 30.0):
         """
-        Launch TmForever/TMLoader and set self.tm_process_id.
-        This function **assumes** nobody else is racing to launch the same port (use ensure_game_launched()).
+        Launch game - ASSUMES caller has already acquired lock.
         """
-        # If we're already running, don't re-launch
+        # Check if already running
         if self.is_game_running():
+            print(f"[GIM] Game already running (PID {self.tm_process_id})")
             return
 
         self.tm_process_id = None
 
         if config_copy.is_linux:
-            # Linux path -- original behavior (keep it)
-            if self.game_spawning_lock is not None:
-                self.game_spawning_lock.acquire()
-            try:
-                pid_before = self.get_tm_pids()
-                os.system(str(user_config.linux_launch_game_path) + " " + str(self.tmi_port))
-                start = time.perf_counter()
-                while time.perf_counter() - start < wait_for_child:
-                    pid_after = self.get_tm_pids()
-                    tmi_pid_candidates = set(pid_after) - set(pid_before)
-                    if len(tmi_pid_candidates) > 0:
-                        self.tm_process_id = list(tmi_pid_candidates)[0]
-                        break
-                    time.sleep(0.1)
-                if self.tm_process_id is None:
-                    raise RuntimeError("Timed out waiting for Trackmania process on Linux.")
-            finally:
-                if self.game_spawning_lock is not None:
-                    self.game_spawning_lock.release()
+            # Linux implementation (keep your existing code)
+            pid_before = self.get_tm_pids()
+            os.system(str(user_config.linux_launch_game_path) + " " + str(self.tmi_port))
+            start = time.perf_counter()
+            while time.perf_counter() - start < wait_for_child:
+                pid_after = self.get_tm_pids()
+                tmi_pid_candidates = set(pid_after) - set(pid_before)
+                if len(tmi_pid_candidates) > 0:
+                    self.tm_process_id = list(tmi_pid_candidates)[0]
+                    break
+                time.sleep(0.1)
+            if self.tm_process_id is None:
+                raise RuntimeError("Timed out waiting for Trackmania process on Linux.")
         else:
-            # Windows path using TMLoader
-            # Build PowerShell command (keep your previous robust formatting)
+            # Windows implementation - IMPROVED
             launch_string = (
                 'powershell -NoProfile -ExecutionPolicy Bypass -Command "& {'
                 f" $process = Start-Process -FilePath '{user_config.windows_TMLoader_path}'"
-                " -PassThru -ArgumentList "
-                f'\'run TmForever \"{user_config.windows_TMLoader_profile_name}\" /configstring=\\\"set custom_port {self.tmi_port}\\\"\''
-                '; Write-Output \"exit $($process.Id)\"'
+                " -PassThru -WindowStyle Hidden -ArgumentList "
+                f'\'run TmForever \"{user_config.windows_TMLoader_profile_name}\" '
+                f'/configstring=\\\"set custom_port {self.tmi_port}\\\"\''
+                '; Write-Output \"LAUNCHER_PID:$($process.Id)\"'
                 '}"'
             )
 
             try:
-                output = subprocess.check_output(launch_string, stderr=subprocess.STDOUT).decode(errors="ignore")
+                output = subprocess.check_output(
+                    launch_string, 
+                    stderr=subprocess.STDOUT,
+                    timeout=10
+                ).decode(errors="ignore")
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("PowerShell launch command timed out")
             except subprocess.CalledProcessError as e:
-                # Print output for debugging, then re-raise
-                print("PowerShell failed to start TMLoader. Output:")
+                print("PowerShell failed:")
                 print(e.output.decode(errors="ignore") if hasattr(e, "output") else str(e))
                 raise
 
-            print("PowerShell launch output:")
-            print(output)
-            lines = [l.strip() for l in output.splitlines() if l.strip()]
-
+            # Parse launcher PID
             tmi_process_id = None
-            # preferred: "exit 1234"
-            for line in lines:
-                if line.lower().startswith("exit "):
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1].isdigit():
-                        tmi_process_id = int(parts[1])
+            for line in output.splitlines():
+                line = line.strip()
+                if line.startswith("LAUNCHER_PID:"):
+                    try:
+                        tmi_process_id = int(line.split(":")[1])
                         break
+                    except:
+                        pass
+            
             if tmi_process_id is None:
-                # fallback: a bare PID line
-                for line in lines:
-                    if line.isdigit():
-                        tmi_process_id = int(line)
-                        break
-
+                # Fallback parsing
+                for line in output.splitlines():
+                    line = line.strip()
+                    if line.lower().startswith("exit "):
+                        parts = line.split()
+                        if len(parts) >= 2 and parts[1].isdigit():
+                            tmi_process_id = int(parts[1])
+                            break
+            
             if tmi_process_id is None:
-                raise RuntimeError(f"Unexpected PowerShell output when launching TMLoader: {lines!r}")
+                raise RuntimeError(f"Could not parse launcher PID from: {output}")
 
-            # wait for child TmForever whose parent is the tmi_process_id
+            print(f"[GIM] TMLoader PID: {tmi_process_id}")
+
+            # Wait for TmForever child process
             start = time.perf_counter()
             while time.perf_counter() - start < wait_for_child:
                 process_lines = self.get_process_triplets()
-                tm_processes = [line for line in process_lines if line.startswith("TmForever")]
-                for line in tm_processes:
+                for line in process_lines:
+                    if not line.startswith("TmForever"):
+                        continue
                     try:
                         name, parent_id_str, process_id_str = line.split()
                         parent_id = int(parent_id_str)
                         process_id = int(process_id_str)
                     except ValueError:
                         continue
+                    
                     if parent_id == tmi_process_id:
                         self.tm_process_id = process_id
                         break
+                
                 if self.tm_process_id is not None:
                     break
-                time.sleep(0.1)
+                time.sleep(0.2)
 
             if self.tm_process_id is None:
-                # fallback: if some TmForever exists at all, take the first one (best-effort)
+                # Last resort: grab any TmForever
                 all_tm = self.get_tm_pids()
                 if len(all_tm) > 0:
+                    print(f"[GIM] Warning: Using fallback TM PID: {all_tm[0]}")
                     self.tm_process_id = all_tm[0]
                 else:
-                    raise RuntimeError("Timed out waiting for Trackmania process on Windows.")
+                    raise RuntimeError("Timed out waiting for TmForever.exe")
 
-        print(f"Found Trackmania process id: {self.tm_process_id=}")
+        print(f"[GIM] Found TmForever PID: {self.tm_process_id}")
         self.last_game_reboot = time.perf_counter()
         self.latest_map_path_requested = -1
         self.msgtype_response_to_wakeup_TMI = None
 
-        # Wait until process pid exists in psutil (give small time for OS to settle)
+        # Wait for process to be visible in psutil
         start = time.perf_counter()
         while time.perf_counter() - start < 10.0:
             if self.is_game_running():
                 break
-            time.sleep(0.05)
+            time.sleep(0.1)
 
-        # find window id (may block a bit) — original method handles that
+        # Get window ID
         self.get_tm_window_id()
 
     def is_game_running(self):
@@ -347,87 +356,119 @@ class GameInstanceManager:
 
     def ensure_game_launched(self, wait_for_registration: float = 20.0):
         """
-        Ensure a Trackmania + TMInterface instance is available for self.tmi_port.
-
-        Strategy:
-        - If we already have an iface that is registered, do nothing.
-        - If TMInterface is already listening on the port, consider the game up (and return).
-        - Otherwise acquire a per-port file lock (so multiple managers on the same host don't race)
-        and call launch_game(); after launching wait for the port to be listening, then return.
+        Fixed version with proper locking and port checking.
         """
-        # If we already have an iface and it's registered, just return
-        try:
-            if self.iface is not None and getattr(self.iface, "registered", False):
-                return
-        except Exception:
-            # defensive: proceed to checks below
-            pass
+        # If we already have a working iface, return
+        if self.iface is not None and getattr(self.iface, "registered", False):
+            return
 
-        # Quick check: is something listening on the TMI port already? If yes, assume the game is up.
         if self.tmi_port is None:
             raise RuntimeError("No tmi_port set for GameInstanceManager")
-
-        if self._is_port_listening(timeout_s=0.2):
-            return
 
         lock_acquired = False
         lock_path = None
         file_lock_fd = None
+        
         try:
+            # === ACQUIRE LOCK FIRST ===
             if self._has_real_lock():
-                # caller provided an actual Lock
+                # Use provided Lock object
                 self.game_spawning_lock.acquire()
                 lock_acquired = True
             else:
-                # no valid lock object provided → file-based lock
-                base = Path(getattr(config_copy, "windows_project_path", ".")) if getattr(config_copy, "windows_project_path", None) else Path(".")
-                lock_path = base / f".tmi_spawn_lock_port_{self.tmi_port}"
-                for _ in range(40):  # up to ~4 seconds
+                # File-based locking with better Windows support
+                if config_copy.is_linux:
+                    lock_dir = Path("/tmp")
+                else:
+                    lock_dir = Path(tempfile.gettempdir())
+                
+                lock_path = lock_dir / f"tmi_spawn_{self.tmi_port}.lock"
+                
+                # Try to acquire file lock (wait up to 30 seconds)
+                for attempt in range(300):  # 300 * 0.1s = 30s
                     try:
-                        file_lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                        os.write(file_lock_fd, str(os.getpid()).encode())
+                        file_lock_fd = os.open(
+                            str(lock_path), 
+                            os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                        )
+                        os.write(file_lock_fd, f"{os.getpid()}\n{time.time()}".encode())
+                        
+                        # On Linux, also use flock for extra safety
+                        if config_copy.is_linux:
+                            try:
+                                fcntl.flock(file_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            except:
+                                pass
+                        
                         lock_acquired = True
                         break
                     except FileExistsError:
+                        # Check if lock file is stale (older than 2 minutes)
+                        try:
+                            if os.path.exists(lock_path):
+                                file_age = time.time() - os.path.getmtime(lock_path)
+                                if file_age > 120:  # 2 minutes
+                                    print(f"[GIM] Removing stale lock file (age: {file_age:.1f}s)")
+                                    try:
+                                        os.remove(lock_path)
+                                    except:
+                                        pass
+                        except:
+                            pass
                         time.sleep(0.1)
+                
                 if not lock_acquired:
-                    # somebody else is probably launching; wait until port becomes available/listening
-                    waited = 0.0
-                    while waited < wait_for_registration:
-                        if self._is_port_listening(timeout_s=0.2):
-                            return
-                        time.sleep(0.25)
-                        waited += 0.25
-                    raise RuntimeError("Timeout waiting for another spawn process to finish.")
+                    raise RuntimeError(
+                        f"Could not acquire game spawn lock for port {self.tmi_port} after 30s"
+                    )
 
-            # --- inside critical section ---
-            if self._is_port_listening(timeout_s=0.2):
+            # === NOW CHECK PORT (INSIDE LOCK) ===
+            if self._is_port_listening(timeout_s=0.5):
+                print(f"[GIM] Port {self.tmi_port} already listening (inside lock)")
                 return
 
+            # === LAUNCH GAME ===
+            print(f"[GIM] Launching game on port {self.tmi_port}")
             self.launch_game()
 
+            # === WAIT FOR PORT TO BECOME AVAILABLE ===
             waited = 0.0
             while waited < wait_for_registration:
                 if self._is_port_listening(timeout_s=0.5):
+                    print(f"[GIM] TMInterface ready on port {self.tmi_port} after {waited:.1f}s")
+                    # Give it a tiny bit more time to fully initialize
+                    time.sleep(0.5)
                     return
                 time.sleep(0.25)
                 waited += 0.25
 
-            raise RuntimeError(f"TMInterface did not become available on port {self.tmi_port} after {wait_for_registration}s")
+            raise RuntimeError(
+                f"TMInterface did not become available on port {self.tmi_port} "
+                f"after {wait_for_registration}s"
+            )
+
         finally:
-            # release/cleanup
+            # === CLEANUP ===
             try:
                 if self._has_real_lock() and lock_acquired:
                     self.game_spawning_lock.release()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[GIM] Error releasing Lock: {e}")
+            
             try:
                 if file_lock_fd is not None:
+                    # Release flock on Linux
+                    if config_copy.is_linux:
+                        try:
+                            fcntl.flock(file_lock_fd, fcntl.LOCK_UN)
+                        except:
+                            pass
                     os.close(file_lock_fd)
+                
                 if lock_path is not None and lock_acquired and os.path.exists(lock_path):
                     os.remove(lock_path)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[GIM] Error cleaning up lock file: {e}")
 
     def grab_screen(self):
         return self.iface.get_frame(config_copy.W_downsized, config_copy.H_downsized)
