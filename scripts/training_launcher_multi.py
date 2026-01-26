@@ -87,7 +87,7 @@ if __name__ == "__main__":
     shared_steps = mp.Value(ctypes.c_int64, 0)  # Initialize with 0
     
     # Number of parallel collectors
-    gpu_collectors_count = 1
+    gpu_collectors_count = 4
     rollout_queues = [
         mp.Queue(config_copy.max_rollout_queue_size) 
         for _ in range(gpu_collectors_count)

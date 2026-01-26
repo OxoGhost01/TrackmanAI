@@ -39,8 +39,8 @@ def collector_process_fn(
     gim = GameInstanceManager(
         game_spawning_lock=None,
         tmi_port=tmi_port,
-        max_minirace_duration_ms=2000,
-        max_overall_duration_ms=100000,
+        max_minirace_duration_ms=1500,
+        max_overall_duration_ms=40000,
     )
     
     consecutive_failures = 0

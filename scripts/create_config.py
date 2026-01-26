@@ -1,5 +1,3 @@
-# create config_copy.py
-
 import os
 
 

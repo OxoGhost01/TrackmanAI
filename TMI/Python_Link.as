@@ -1,3 +1,5 @@
+// ! This file is from the Linesight project, available on github.com/Linesight-RL/linesight
+
 Net::Socket@ sock = null;
 Net::Socket@ clientSock = null;
 

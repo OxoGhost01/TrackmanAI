@@ -17,7 +17,7 @@ def make_rewards_from_rollout(results, stats, shared_best_time=None, best_time_l
 
     prog = np.array(prog_seq, dtype=np.float32)
 
-    # --- Hyperparameters  ---
+    # --- Hyperparameters (TODO: soon in config_files) ---
     k_progress = 1.0          # strong progress signal
     k_time = -0.0001           # tiny per-step time penalty
     stuck_penalty = -5.0       # only when really stuck
