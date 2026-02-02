@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 import torch
 import torch.multiprocessing as mp
-from torch.multiprocessing import Lock
 from art import tprint
 
 from scripts.create_config import create_config_copy
@@ -24,7 +23,6 @@ def clear_tm_instances():
         os.system("pkill -9 TmForever.exe")
     else:
         os.system("taskkill /F /IM TmForever.exe")
-    
     import time
     time.sleep(1.0)
 
@@ -48,7 +46,6 @@ def signal_handler(sig, frame):
     import time
     time.sleep(2.0)
     
-    # Force kill any remaining
     for child in mp.active_children():
         print(f"[WARN] Force killing: {child.name}")
         child.kill()
@@ -62,7 +59,6 @@ if __name__ == "__main__":
     
     signal.signal(signal.SIGINT, signal_handler)
     
-    # Force spawn method (critical on Windows)
     mp.set_start_method("spawn", force=True)
     
     clear_tm_instances()
@@ -84,10 +80,9 @@ if __name__ == "__main__":
         os.system(f"chmod +x {config_copy.linux_launch_game_path}")
     
     # --- Shared objects ---
-    shared_steps = mp.Value(ctypes.c_int64, 0)  # Initialize with 0
+    shared_steps = mp.Value(ctypes.c_int64, 0)
     
-    # Number of parallel collectors
-    gpu_collectors_count = 4
+    gpu_collectors_count = 2
     rollout_queues = [
         mp.Queue(config_copy.max_rollout_queue_size) 
         for _ in range(gpu_collectors_count)
@@ -95,9 +90,11 @@ if __name__ == "__main__":
     
     manager = mp.Manager()
     shared_network_lock = manager.Lock()
-    
     shared_best_time = mp.Value(ctypes.c_double, 1e12)
     best_time_lock = manager.Lock()
+    
+    # CRITICAL: Single shared lock for game launching (prevents race conditions)
+    game_spawning_lock = manager.Lock()
     
     # Create shared TrackmaniaAgent
     state_dim = 19384
@@ -128,6 +125,7 @@ if __name__ == "__main__":
                 process_number,
                 shared_best_time,
                 best_time_lock,
+                game_spawning_lock,  # Pass the SAME lock to ALL collectors
             ),
             name=f"Collector-{process_number}",
         )
@@ -165,7 +163,6 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
     finally:
-        # Cleanup
         print("\n[INFO] Shutting down collectors...")
         for collector_process in collector_processes:
             collector_process.terminate()

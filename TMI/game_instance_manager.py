@@ -133,23 +133,50 @@ class GameInstanceManager:
         if config_copy.is_linux:
             self.tm_window_id = None
             max_attempts = 50
+            
             for attempt in range(max_attempts):
-                window_search_depth = 1
-                while window_search_depth <= 10:
-                    c1 = set(Xdo().search_windows(winname=b"TrackMania", max_depth=window_search_depth + 1))
-                    c2 = set(Xdo().search_windows(winname=b"TrackMania", max_depth=window_search_depth))
-                    c1 = {w_id for w_id in c1 if Xdo().get_pid_window(w_id) == self.tm_process_id}
-                    c2 = {w_id for w_id in c2 if Xdo().get_pid_window(w_id) == self.tm_process_id}
-                    c1_diff_c2 = c1.difference(c2)
+                try:
+                    window_search_depth = 1
+                    found = False
                     
-                    if len(c1_diff_c2) == 1:
-                        self.tm_window_id = c1_diff_c2.pop()
-                        print(f"[GIM] Found window ID: {self.tm_window_id}")
-                        return
-                    elif len(c1_diff_c2) == 0 and len(c1) > 0:
-                        print(f"[GIM] Warning: Could not find window at depth {window_search_depth}")
-                        break
-                    window_search_depth += 1
+                    while window_search_depth <= 10 and not found:
+                        try:
+                            # Search for TrackMania windows
+                            c1 = set(Xdo().search_windows(
+                                winname=b"TrackMania", 
+                                max_depth=window_search_depth + 1
+                            ))
+                            c2 = set(Xdo().search_windows(
+                                winname=b"TrackMania", 
+                                max_depth=window_search_depth
+                            ))
+                            
+                            # Filter by PID
+                            c1 = {w_id for w_id in c1 if Xdo().get_pid_window(w_id) == self.tm_process_id}
+                            c2 = {w_id for w_id in c2 if Xdo().get_pid_window(w_id) == self.tm_process_id}
+                            c1_diff_c2 = c1.difference(c2)
+                            
+                            if len(c1_diff_c2) == 1:
+                                self.tm_window_id = c1_diff_c2.pop()
+                                print(f"[GIM] Found window ID: {self.tm_window_id}")
+                                return
+                            elif len(c1_diff_c2) == 0 and len(c1) > 0:
+                                # Found window but depth is wrong, move on
+                                break
+                            
+                            window_search_depth += 1
+                        
+                        except Exception as e:
+                            # Xdo can throw errors when windows are still being created
+                            # Just skip this depth and try next
+                            window_search_depth += 1
+                            continue
+                    
+                except Exception as e:
+                    # Xdo errors are common when multiple processes access X11 simultaneously
+                    # Just wait and retry
+                    pass
+                
                 time.sleep(0.1)
             
             print(f"[GIM] Warning: Could not find TrackMania window after {max_attempts} attempts")
@@ -188,39 +215,41 @@ class GameInstanceManager:
         """Launch TrackMania with TMInterface. Simplified and safer version than the original one."""
         self.tm_process_id = None
 
-        if config_copy.is_linux:
-            # LINUX: Use launch script (works with Wine, Lutris, etc.)
+        if config_copy.is_linux:            
+            # Acquire lock to prevent race conditions
             if self.game_spawning_lock is not None:
                 self.game_spawning_lock.acquire()
             
             try:
+                # Get PIDs before launch
                 pid_before = self.get_tm_pids()
                 
-                # Build launch command
+                # Build and execute launch command
                 launch_cmd = f"{user_config.linux_launch_game_path} {self.tmi_port}"
                 print(f"[GIM] Launching: {launch_cmd}")
-                
-                # Launch game
                 os.system(launch_cmd)
                 
-                # Wait for new TmForever process
+                # Wait for NEW TmForever process to appear
                 max_wait = 30
                 start = time.perf_counter()
+                
                 while time.perf_counter() - start < max_wait:
                     pid_after = self.get_tm_pids()
                     new_pids = set(pid_after) - set(pid_before)
+                    
                     if len(new_pids) > 0:
+                        # Found new process
                         self.tm_process_id = list(new_pids)[0]
+                        print(f"[GIM] Found new TmForever process: PID {self.tm_process_id}")
                         break
+                    
                     time.sleep(0.2)
                 
                 if self.tm_process_id is None:
-                    raise RuntimeError("Timed out waiting for TmForever process")
-                    
+                    raise RuntimeError(f"Timed out waiting for TmForever process on port {self.tmi_port}")
+            
             finally:
-                # Lock will be released later on Linux (see rollout() method)
                 pass
-                
         else:
             # === WINDOWS IMPLEMENTATION (Simplified) ===
             
@@ -348,7 +377,7 @@ class GameInstanceManager:
         zone_centers_filename: str,
         update_network: Callable
     ):
-        base_dir = config_copy.windows_project_path if not config_copy.is_linux else Path.home() / "TrackmanAI"
+        base_dir = config_copy.windows_project_path if not config_copy.is_linux else config_copy.linux_project_path
         zone_centers = map_loader.load_next_map_zone_centers(zone_centers_filename, base_dir)
         
         (

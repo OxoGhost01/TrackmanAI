@@ -2,7 +2,6 @@ import time
 from pathlib import Path
 import torch
 import numpy as np
-from multiprocessing import Lock
 
 from TMI.game_instance_manager import GameInstanceManager
 from scripts.rewards import make_rewards_from_rollout
@@ -19,7 +18,7 @@ def collector_process_fn(
     process_number: int,
     shared_best_time,
     best_time_lock,
-    game_spawning_lock=None,
+    game_spawning_lock,
 ):
     """
     Collector loop: runs game rollouts and pushes to queue.
@@ -37,7 +36,7 @@ def collector_process_fn(
     )
     
     gim = GameInstanceManager(
-        game_spawning_lock=None,
+        game_spawning_lock=game_spawning_lock,  # Pass the shared lock!
         tmi_port=tmi_port,
         max_minirace_duration_ms=1500,
         max_overall_duration_ms=40000,
@@ -48,7 +47,7 @@ def collector_process_fn(
     
     while True:
         try:
-            # Ensure game is running (handles locking internally)
+            # Ensure game is running
             gim.ensure_game_launched()
             
             # Run rollout
@@ -118,7 +117,7 @@ def collector_process_fn(
                 if gim.is_game_running():
                     print(f"[Collector {process_number}] Game still running, continuing...")
                 else:
-                    print(f"[Collector {process_number}] Game crashed, will restart on next iteration")
+                    print(f"[Collector {process_number}] Game crashed, will restart")
                     gim.iface = None
                     gim.tm_process_id = None
             except:
