@@ -82,9 +82,9 @@ if __name__ == "__main__":
     # --- Shared objects ---
     shared_steps = mp.Value(ctypes.c_int64, 0)
     
-    gpu_collectors_count = 2
+    gpu_collectors_count = config_copy.gpu_collectors_count
     rollout_queues = [
-        mp.Queue(config_copy.max_rollout_queue_size) 
+        mp.Queue(config_copy.max_rollout_queue_size)
         for _ in range(gpu_collectors_count)
     ]
     
@@ -96,10 +96,7 @@ if __name__ == "__main__":
     # CRITICAL: Single shared lock for game launching (prevents race conditions)
     game_spawning_lock = manager.Lock()
     
-    # Create shared TrackmaniaAgent
-    state_dim = 19384
-    action_dim = 4
-    shared_network = TrackmaniaAgent(state_dim=state_dim, action_dim=action_dim)
+    shared_network = TrackmaniaAgent()
     
     if load_agent(shared_network, save_dir):
         print("[INFO] Loaded agent from checkpoint.")

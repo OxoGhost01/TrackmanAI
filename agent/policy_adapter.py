@@ -1,7 +1,8 @@
 import numpy as np
 import torch
 
-from config_files.input_list import inputs  # adjust path if needed
+from config_files.input_list import inputs
+from agent.normalize import normalize_floats
 
 
 def make_exploration_policy(agent, net_lock=None):
@@ -9,11 +10,12 @@ def make_exploration_policy(agent, net_lock=None):
         if net_lock is not None:
             net_lock.acquire()
         try:
+            floats_norm = normalize_floats(floats.astype(np.float32))
             frame_norm = frame.astype(np.float32).flatten() / 255.0
-            obs_np = np.concatenate((floats.astype(np.float32), frame_norm))
+            obs_np = np.concatenate((floats_norm, frame_norm))
             obs_t = torch.tensor(obs_np, dtype=torch.float32).unsqueeze(0)
 
-            left, right, gas, brake, log_prob = agent.act(obs_t)
+            left, right, gas, brake, _ = agent.act(obs_t)
 
             left = bool(round(left))
             right = bool(round(right))

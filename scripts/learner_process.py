@@ -1,14 +1,16 @@
-
 import time
+import copy
 import torch
 
 from agent.trainer import PPOTrainer
+from agent.save_utils import save_agent
 from config_files.input_list import inputs as INPUTS_LIST
+from tools.stats_logger import StatsLogger
 
 
 def learner_process_fn(
     rollout_queues,
-    shared_network,       # TrackmaniaAgent in shared memory
+    shared_network,
     shared_network_lock,
     shared_steps,
     base_dir,
@@ -21,17 +23,22 @@ def learner_process_fn(
     clip_epsilon=0.2,
     lr=3e-5,
     value_coef=0.5,
-    entropy_coef=0.05,
-    batch_episodes=4,     # episodes per PPO update
+    entropy_coef=0.08,
+    batch_episodes=4,
+    save_every_n_updates=50,
 ):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    shared_network.to(device)
+    print(f"[Learner] Training device: {device}")
 
-    # Create PPO trainer around the shared network
+    stats_logger = StatsLogger(save_dir)
+
+    local_network = copy.deepcopy(shared_network)
+    local_network.to(device)
+
     trainer = PPOTrainer(
-        agent=shared_network,
+        agent=local_network,
         input_list=INPUTS_LIST,
         device=device,
         gamma=gamma,
@@ -39,54 +46,58 @@ def learner_process_fn(
         lr=lr,
         value_coef=value_coef,
         entropy_coef=entropy_coef,
+        ppo_epochs=3,
     )
 
-    episode_idx = 0
+    update_count = 0
 
     while True:
-        batch_obs = []
-        batch_actions = []
-        batch_rewards = []
+        episodes = []
         batch_stats = []
 
-        # Collect batch_episodes episodes total across all queues
-        while len(batch_stats) < batch_episodes:
+        while len(episodes) < batch_episodes:
             for q in rollout_queues:
                 if not q.empty():
                     payload = q.get()
 
-                    obs = payload["obs"]
-                    actions = payload["actions"]
-                    rewards = payload["rewards"]
-                    stats = payload["stats"]
+                    episode = {
+                        "obs": payload["obs"],
+                        "actions": payload["actions"],
+                        "rewards": payload["rewards"],
+                    }
+                    episodes.append(episode)
+                    batch_stats.append(payload["stats"])
 
-                    batch_obs.extend(obs)
-                    batch_actions.extend(actions)
-                    batch_rewards.extend(rewards)
-                    batch_stats.append(stats)
-
-                    episode_idx += 1
-                    # print(f"[Learner] Got episode {episode_idx}, len={len(obs)}, stats={stats}")
-
-                    if len(batch_stats) >= batch_episodes:
+                    if len(episodes) >= batch_episodes:
                         break
 
             time.sleep(0.01)
 
-        if len(batch_obs) == 0:
-            print("[Learner] Empty batch, skipping update.")
+        if not episodes:
+            print("[Learner] No episodes collected, skipping.")
             continue
 
-        # Convert to flat episode for PPO
-        obs_flat = batch_obs
-        actions_flat = batch_actions
-        rewards_flat = batch_rewards
+        info = trainer.update_from_episodes(episodes)
 
-        # Lock network while doing update (protects collectors if they lock during inference)
         with shared_network_lock:
-            info = trainer.update_from_episode(obs_flat, actions_flat, rewards_flat)
+            for shared_param, local_param in zip(
+                shared_network.parameters(), local_network.parameters()
+            ):
+                shared_param.data.copy_(local_param.data.cpu())
 
-        print(f"[Learner] PPO update done. Info: {info}")
-        print(f"[Learner] Batch stats (size={len(batch_stats)}):")
+        update_count += 1
+
+        print(f"[Learner] Update #{update_count} | {info}")
         for i, s in enumerate(batch_stats):
-            print(f"  Episode {i}: {s}")
+            finished = s.get("race_finished", False)
+            race_time = s.get("race_time", 0)
+            print(f"  Ep {i}: finished={finished}, time={race_time}ms")
+
+        stats_logger.log(update_count, info, batch_stats)
+
+        if update_count % save_every_n_updates == 0:
+            try:
+                save_agent(shared_network, save_dir)
+                print(f"[Learner] Checkpoint saved at update {update_count}")
+            except Exception as e:
+                print(f"[Learner] Failed to save: {e}")

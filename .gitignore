@@ -1,2 +1,3 @@
-config_files
+config_files/config_copy.py
+config_files/user_config.py
 notes.md

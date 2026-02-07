@@ -1,23 +1,24 @@
-import os
+from pathlib import Path
 
 
 def create_config_copy():
-    if os.path.exists("config_files/config_copy.py"):
-        os.remove("config_files/config_copy.py")
+    base_dir = Path(__file__).resolve().parents[1]
+    config_dir = base_dir / "config_files"
 
-    with open("config_files/config.py", "r", encoding="utf-8") as f:
-        configg = f.read()
+    config_copy_path = config_dir / "config_copy.py"
+    if config_copy_path.exists():
+        config_copy_path.unlink()
 
-    with open("config_files/user_config.py", "r", encoding="utf-8") as f:
-        u_configg = f.read()
+    config_text = (config_dir / "config.py").read_text(encoding="utf-8")
+    user_config_text = (config_dir / "user_config.py").read_text(encoding="utf-8")
+    input_list_text = (config_dir / "input_list.py").read_text(encoding="utf-8")
 
-    with open("config_files/input_list.py", "r", encoding="utf-8") as f:
-        input_listg = f.read()
+    combined = (
+        config_text
+        + "\n\n# user config\n"
+        + user_config_text
+        + "\n\n# input list\n"
+        + input_list_text
+    )
 
-
-    with open("config_files/config_copy.py", "w", encoding="utf-8") as f:
-        f.write(configg)
-        f.write("\n\n# user config\n")
-        f.write(u_configg)
-        f.write("\n\n# input list\n")
-        f.write(input_listg)
+    config_copy_path.write_text(combined, encoding="utf-8")

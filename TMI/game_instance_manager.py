@@ -125,6 +125,7 @@ class GameInstanceManager:
         self.start_states = {}
         self.game_spawning_lock = game_spawning_lock
         self.game_activated = False
+        self._lock_held = False
 
     def get_tm_window_id(self):
         """Find the TrackMania window ID."""
@@ -214,99 +215,90 @@ class GameInstanceManager:
     def launch_game(self):
         """Launch TrackMania with TMInterface. Simplified and safer version than the original one."""
         self.tm_process_id = None
+        self._lock_held = False
 
-        if config_copy.is_linux:            
-            # Acquire lock to prevent race conditions
-            if self.game_spawning_lock is not None:
-                self.game_spawning_lock.acquire()
-            
-            try:
-                # Get PIDs before launch
+        if self.game_spawning_lock is not None:
+            self.game_spawning_lock.acquire()
+            self._lock_held = True
+
+        try:
+            if config_copy.is_linux:
                 pid_before = self.get_tm_pids()
-                
-                # Build and execute launch command
+
                 launch_cmd = f"{user_config.linux_launch_game_path} {self.tmi_port}"
                 print(f"[GIM] Launching: {launch_cmd}")
                 os.system(launch_cmd)
-                
-                # Wait for NEW TmForever process to appear
+
                 max_wait = 30
                 start = time.perf_counter()
-                
+
                 while time.perf_counter() - start < max_wait:
                     pid_after = self.get_tm_pids()
                     new_pids = set(pid_after) - set(pid_before)
-                    
+
                     if len(new_pids) > 0:
-                        # Found new process
                         self.tm_process_id = list(new_pids)[0]
                         print(f"[GIM] Found new TmForever process: PID {self.tm_process_id}")
                         break
-                    
+
                     time.sleep(0.2)
-                
+
                 if self.tm_process_id is None:
                     raise RuntimeError(f"Timed out waiting for TmForever process on port {self.tmi_port}")
-            
-            finally:
-                pass
-        else:
-            # === WINDOWS IMPLEMENTATION (Simplified) ===
-            
-            # Get PIDs before launch
-            pid_before = set(self.get_tm_pids())
-            
-            # Build launch command
-            launch_string = (
-                'powershell -executionPolicy bypass -command "& {'
-                f" $process = start-process -FilePath '{user_config.windows_TMLoader_path}'"
-                " -PassThru -ArgumentList "
-                f'\'run TmForever \"{user_config.windows_TMLoader_profile_name}\" '
-                f'/configstring=\\\"set custom_port {self.tmi_port}\\\"\';'
-                ' echo exit $process.id}"'
-            )
-            
-            print(f"[GIM] Launching TMLoader...")
-            
-            try:
-                # Launch (don't capture output, we don't need the launcher PID)
-                subprocess.run(
-                    launch_string,
-                    shell=True,
-                    check=True,
-                    timeout=10,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+            else:
+                pid_before = set(self.get_tm_pids())
+
+                launch_string = (
+                    'powershell -executionPolicy bypass -command "& {'
+                    f" $process = start-process -FilePath '{user_config.windows_TMLoader_path}'"
+                    " -PassThru -ArgumentList "
+                    f'\'run TmForever \"{user_config.windows_TMLoader_profile_name}\" '
+                    f'/configstring=\\\"set custom_port {self.tmi_port}\\\"\';'
+                    ' echo exit $process.id}"'
                 )
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"Failed to launch TMLoader: {e}")
-            except FileNotFoundError:
-                raise RuntimeError("PowerShell not found")
-            
-            # Wait for new TmForever process to appear
-            max_wait = 30
-            start = time.perf_counter()
-            
-            while time.perf_counter() - start < max_wait:
-                pid_after = set(self.get_tm_pids())
-                new_pids = pid_after - pid_before
-                
-                if len(new_pids) > 0:
-                    # Found new TmForever processj
-                    self.tm_process_id = list(new_pids)[0]
-                    print(f"[GIM] Found new TmForever process: PID {self.tm_process_id}")
-                    break
-                
-                time.sleep(0.2)
-            
-            if self.tm_process_id is None:
-                # Last resort: grab any TmForever process
-                all_pids = self.get_tm_pids()
-                if len(all_pids) > 0:
-                    self.tm_process_id = all_pids[0]
-                    print(f"[GIM] Warning: Using existing TmForever PID: {self.tm_process_id}")
-                else:
-                    raise RuntimeError("No TmForever.exe process found after launch")
+
+                print(f"[GIM] Launching TMLoader...")
+
+                try:
+                    subprocess.run(
+                        launch_string,
+                        shell=True,
+                        check=True,
+                        timeout=10,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                except subprocess.CalledProcessError as e:
+                    raise RuntimeError(f"Failed to launch TMLoader: {e}")
+                except FileNotFoundError:
+                    raise RuntimeError("PowerShell not found")
+
+                max_wait = 30
+                start = time.perf_counter()
+
+                while time.perf_counter() - start < max_wait:
+                    pid_after = set(self.get_tm_pids())
+                    new_pids = pid_after - pid_before
+
+                    if len(new_pids) > 0:
+                        self.tm_process_id = list(new_pids)[0]
+                        print(f"[GIM] Found new TmForever process: PID {self.tm_process_id}")
+                        break
+
+                    time.sleep(0.2)
+
+                if self.tm_process_id is None:
+                    all_pids = self.get_tm_pids()
+                    if len(all_pids) > 0:
+                        self.tm_process_id = all_pids[0]
+                        print(f"[GIM] Warning: Using existing TmForever PID: {self.tm_process_id}")
+                    else:
+                        raise RuntimeError("No TmForever.exe process found after launch")
+        except Exception:
+            if self._lock_held and self.game_spawning_lock is not None:
+                self.game_spawning_lock.release()
+                self._lock_held = False
+            raise
 
         print(f"[GIM] Trackmania process id: {self.tm_process_id}")
         self.last_game_reboot = time.perf_counter()
@@ -768,6 +760,7 @@ class GameInstanceManager:
                             rollout_results["actions"].append(np.nan)
                             rollout_results["action_was_greedy"].append(np.nan)
                             rollout_results["car_gear_and_wheels"].append(np.nan)
+                            rollout_results["state_float"].append(np.nan)
                             rollout_results["meters_advanced_along_centerline"].append(
                                 distance_from_start_track_to_prev_zone_transition[
                                     len(zone_centers) - config_copy.n_zone_centers_extrapolate_after_end_of_map
@@ -832,10 +825,9 @@ class GameInstanceManager:
                         if not self.game_activated:
                             _set_window_focus(self.tm_window_id)
                             self.game_activated = True
-                            if config_copy.is_linux:
-                                # With the switch to ModLoader, we observed that the game instance needs to be focused once to work properly,
-                                # but this needs to be done late enough AND not when another game instance is starting.
+                            if self._lock_held and self.game_spawning_lock is not None:
                                 self.game_spawning_lock.release()
+                                self._lock_held = False
 
                         instrumentation__request_inputs_and_speed += time.perf_counter_ns() - pc8
                     self.iface._respond_to_call(msgtype)

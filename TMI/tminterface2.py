@@ -7,7 +7,6 @@ The class is designed to (mostly) reproduce the original Python client provided 
 (https://github.com/donadigo/TMInterfaceClientPython/blob/ce73dd80c33a9e7b48e9601256e94d8a6bf15a92/tminterface/interface.py)
 """
 
-import signal
 import socket
 import struct
 from enum import IntEnum, auto
@@ -56,13 +55,8 @@ class TMInterface:
         self.sock.close()
         self.registered = False
 
-    def signal_handler(self, sig, frame):
-        print("Shutting down...")
-        self.close()
-
     def register(self, timeout=None):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        signal.signal(signal.SIGINT, self.signal_handler)
         # https://stackoverflow.com/questions/45864828/msg-waitall-combined-with-so-rcvtimeo
         # https://stackoverflow.com/questions/2719017/how-to-set-timeout-on-pythons-socket-recv-method
         if timeout is not None:
