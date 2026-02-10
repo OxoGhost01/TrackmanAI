@@ -1,13 +1,17 @@
+from scripts.create_config import create_config_copy
+create_config_copy()
+from config_files import config_copy
+
 import ctypes
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 import torch
 import torch.multiprocessing as mp
 from art import tprint
 
-from scripts.create_config import create_config_copy
 from scripts.collector_process import collector_process_fn
 from scripts.learner_process import learner_process_fn
 from agent.agent import TrackmaniaAgent
@@ -53,10 +57,7 @@ def signal_handler(sig, frame):
     tprint("Bye bye!", font="tarty1")
     sys.exit(0)
 
-if __name__ == "__main__":
-    create_config_copy()
-    from config_files import config_copy
-    
+if __name__ == "__main__":    
     signal.signal(signal.SIGINT, signal_handler)
     
     mp.set_start_method("spawn", force=True)
@@ -78,7 +79,16 @@ if __name__ == "__main__":
     
     if config_copy.is_linux:
         os.system(f"chmod +x {config_copy.linux_launch_game_path}")
-    
+
+    # --- Launch live dashboard in background ---
+    log_file = save_dir / "training_log.jsonl"
+    log_file.touch(exist_ok=True)  # ensure file exists before dashboard reads it
+    dashboard_proc = subprocess.Popen(
+        [sys.executable, "-m", "tools.live_dashboard", str(log_file)],
+        cwd=str(base_dir),
+    )
+    print(f"[INFO] Live dashboard started (PID {dashboard_proc.pid})")
+
     # --- Shared objects ---
     shared_steps = mp.Value(ctypes.c_int64, 0)
     
@@ -169,5 +179,9 @@ if __name__ == "__main__":
             if collector_process.is_alive():
                 collector_process.kill()
         
+        if dashboard_proc.poll() is None:
+            dashboard_proc.terminate()
+            print("[INFO] Dashboard closed")
+
         clear_tm_instances()
         print("[INFO] Shutdown complete")

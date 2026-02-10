@@ -4,7 +4,7 @@ from sys import platform
 # ==============================================
 # GENERAL RUN INFO
 # ==============================================
-run_name = "test1 v2.0"  # name of the save
+run_name = "test1-v2.2"  # name of the save
 running_speed = 80  # runs 80x the speed of the game
 is_linux = platform in ["linux", "linux2"]
 
@@ -38,7 +38,7 @@ H_downsized = 120
 # ==============================================
 # EPISODE SETTINGS
 # ==============================================
-cutoff_rollout_if_race_not_finished_within_duration_ms = 60_000
+cutoff_rollout_if_race_not_finished_within_duration_ms = 120_000
 cutoff_rollout_if_no_vcp_passed_within_duration_ms = 3_000
 
 # ==============================================

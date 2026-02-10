@@ -21,9 +21,9 @@ def learner_process_fn(
     device=None,
     gamma=0.995,
     clip_epsilon=0.2,
-    lr=3e-5,
-    value_coef=0.5,
-    entropy_coef=0.08,
+    lr=1e-4,
+    value_coef=1.0,
+    entropy_coef=0.15,
     batch_episodes=4,
     save_every_n_updates=50,
 ):
