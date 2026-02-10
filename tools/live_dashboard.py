@@ -13,6 +13,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -40,82 +41,107 @@ def load_entries(path: Path) -> list:
     return entries
 
 
+def smooth(values, window=20):
+    """Simple moving average for noisy data."""
+    if len(values) < window:
+        return values
+    kernel = np.ones(window) / window
+    padded = np.pad(values, (window - 1, 0), mode="edge")
+    return np.convolve(padded, kernel, mode="valid").tolist()
+
+
 def draw(axes, entries):
     if len(entries) < 2:
         return
 
     updates = [e["update"] for e in entries]
-    wall_min = [e["wall_time"] / 60 for e in entries]
 
     # --- 1. Total return ---
     ax = axes[0, 0]
     ax.clear()
-    ax.plot(updates, [e["total_return"] for e in entries], color="#2196F3", linewidth=1)
+    raw = [e["total_return"] for e in entries]
+    ax.plot(updates, raw, color="#2196F3", linewidth=0.5, alpha=0.3)
+    ax.plot(updates, smooth(raw), color="#2196F3", linewidth=2)
     ax.set_title("Total Return (per batch)")
-    ax.set_xlabel("Update")
     ax.set_ylabel("Sum of rewards")
     ax.grid(True, alpha=0.3)
 
     # --- 2. Avg reward per step ---
     ax = axes[0, 1]
     ax.clear()
-    ax.plot(updates, [e["avg_reward_per_step"] for e in entries], color="#4CAF50", linewidth=1)
+    raw = [e["avg_reward_per_step"] for e in entries]
+    ax.plot(updates, raw, color="#4CAF50", linewidth=0.5, alpha=0.3)
+    ax.plot(updates, smooth(raw), color="#4CAF50", linewidth=2)
     ax.set_title("Avg Reward / Step")
-    ax.set_xlabel("Update")
+    ax.axhline(y=0, color="gray", linestyle="-", alpha=0.3)
     ax.grid(True, alpha=0.3)
 
     # --- 3. Policy loss ---
     ax = axes[1, 0]
     ax.clear()
-    ax.plot(updates, [e["policy_loss"] for e in entries], color="#FF9800", linewidth=1)
+    raw = [e["policy_loss"] for e in entries]
+    ax.plot(updates, raw, color="#FF9800", linewidth=0.5, alpha=0.3)
+    ax.plot(updates, smooth(raw), color="#FF9800", linewidth=2)
     ax.set_title("Policy Loss")
-    ax.set_xlabel("Update")
+    ax.axhline(y=0, color="gray", linestyle="-", alpha=0.3)
     ax.grid(True, alpha=0.3)
 
     # --- 4. Value loss ---
     ax = axes[1, 1]
     ax.clear()
-    ax.plot(updates, [e["value_loss"] for e in entries], color="#F44336", linewidth=1)
+    raw = [e["value_loss"] for e in entries]
+    ax.plot(updates, raw, color="#F44336", linewidth=0.5, alpha=0.3)
+    ax.plot(updates, smooth(raw), color="#F44336", linewidth=2)
     ax.set_title("Value Loss")
-    ax.set_xlabel("Update")
     ax.grid(True, alpha=0.3)
 
     # --- 5. Entropy ---
     ax = axes[2, 0]
     ax.clear()
-    ax.plot(updates, [e["entropy"] for e in entries], color="#9C27B0", linewidth=1)
-    ax.axhline(y=2.08, color="gray", linestyle="--", alpha=0.5, label="max (3×ln2)")
+    raw = [e["entropy"] for e in entries]
+    ax.plot(updates, raw, color="#9C27B0", linewidth=0.5, alpha=0.3)
+    ax.plot(updates, smooth(raw), color="#9C27B0", linewidth=2)
+    ax.axhline(y=2.08, color="gray", linestyle="--", alpha=0.5, label="max (3*ln2)")
     ax.set_title("Entropy")
-    ax.set_xlabel("Update")
     ax.set_ylim(bottom=0, top=2.3)
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    # --- 6. Race finishes + best time ---
+    # --- 6. Race finish % ---
     ax = axes[2, 1]
     ax.clear()
     finish_pct = [
         100 * e["episodes_finished"] / max(e["episodes_total"], 1) for e in entries
     ]
-    ax.plot(updates, finish_pct, color="#009688", linewidth=1, label="finish %")
+    ax.bar(updates, finish_pct, color="#009688", alpha=0.4, width=max(1, len(updates) // 200))
+    if len(finish_pct) >= 20:
+        ax.plot(updates, smooth(finish_pct), color="#009688", linewidth=2)
     ax.set_title("Race Finish %")
-    ax.set_xlabel("Update")
     ax.set_ylabel("%")
     ax.set_ylim(-5, 105)
     ax.grid(True, alpha=0.3)
 
+    # Add best time as text annotation
     best_times = [e["best_race_time_ms"] for e in entries if e["best_race_time_ms"] is not None]
-    best_updates = [e["update"] for e in entries if e["best_race_time_ms"] is not None]
     if best_times:
-        ax2 = ax.twinx()
-        ax2.plot(best_updates, [t / 1000 for t in best_times], color="#E91E63",
-                 linewidth=1, linestyle="--", label="best time (s)")
-        ax2.set_ylabel("Best time (s)", color="#E91E63")
-        ax2.tick_params(axis="y", labelcolor="#E91E63")
+        overall_best = min(best_times) / 1000
+        recent_best = min(e["best_race_time_ms"] for e in entries[-50:] if e["best_race_time_ms"] is not None) / 1000 if any(e["best_race_time_ms"] is not None for e in entries[-50:]) else None
+        text = f"Best: {overall_best:.1f}s"
+        if recent_best and recent_best != overall_best:
+            text += f"\nRecent: {recent_best:.1f}s"
+        ax.text(0.98, 0.95, text, transform=ax.transAxes, fontsize=11,
+                fontweight="bold", color="#E91E63", ha="right", va="top",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#E91E63", alpha=0.9))
+
+    total_finishes = sum(e["episodes_finished"] for e in entries)
+    total_eps = sum(e["episodes_total"] for e in entries)
+    ax.text(0.02, 0.95, f"Total: {total_finishes}/{total_eps}", transform=ax.transAxes,
+            fontsize=9, color="#666", ha="left", va="top")
 
     for row in axes:
         for a in row:
             a.xaxis.set_major_locator(MaxNLocator(integer=True))
+            a.set_xlabel("Update", fontsize=8)
 
 
 def main():
